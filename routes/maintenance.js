@@ -1,9 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const Maintenance = require('../models/Maintenance');
-const ClosedDate = require('../models/ClosedDate'); // นำเข้า ClosedDate model
+const ClosedDate = require('../models/ClosedDate');
 const axios = require('axios');
 const auth = require('../middleware/auth');
+
+// กำหนดจำนวนคิวสูงสุดต่อวัน
+const MAX_BOOKINGS_PER_DAY = 4; // ปรับเปลี่ยนตามต้องการ
 
 // สร้างคำขอ maintenance
 router.post('/', async (req, res) => {
@@ -15,7 +18,7 @@ router.post('/', async (req, res) => {
       carModel,
       licensePlate,
       preferredDate,
-      maintenanceType, // รวม maintenanceType
+      maintenanceType,
     });
     await maintenance.save();
 
@@ -50,7 +53,6 @@ router.get('/', auth, async (req, res) => {
 // ดึงวันที่ที่เต็ม (รวมวันที่ถูกจองและวันที่ปิด)
 router.get('/booked-dates', async (req, res) => {
   try {
-    // ดึงวันที่ที่ถูกจอง (สถานะ pending หรือ accepted)
     const fullDates = await Maintenance.aggregate([
       {
         $match: {
@@ -64,22 +66,20 @@ router.get('/booked-dates', async (req, res) => {
         },
       },
       {
-        $match: { count: { $gte: 1 } },
+        $match: { count: { $gte: MAX_BOOKINGS_PER_DAY } },
       },
       {
         $project: { _id: 1 },
       },
     ]);
 
-    // ดึงวันที่ที่ถูกปิด
     const closedDates = await ClosedDate.find();
     const closedDatesFormatted = closedDates.map(cd => new Date(cd.date).toISOString().split('T')[0]);
 
-    // รวมวันที่ทั้งหมด
     const bookedDates = [
       ...fullDates.map(item => item._id),
       ...closedDatesFormatted,
-    ].filter((date, index, self) => self.indexOf(date) === index); // ลบข้อมูลซ้ำ
+    ].filter((date, index, self) => self.indexOf(date) === index);
 
     res.json({ bookedDates });
   } catch (error) {
@@ -131,15 +131,39 @@ router.patch('/:id', auth, async (req, res) => {
       return res.status(404).json({ message: 'ไม่พบคำขอ' });
     }
 
-    // อัปเดตฟิลด์ที่ได้รับจาก payload
+    if (req.body.preferredDate) {
+      const newDate = new Date(req.body.preferredDate);
+      const dateString = newDate.toISOString().split('T')[0];
+
+      // ตรวจสอบวันที่ถูกปิด
+      const closedDates = await ClosedDate.find();
+      const closedDatesFormatted = closedDates.map(cd => new Date(cd.date).toISOString().split('T')[0]);
+      if (closedDatesFormatted.includes(dateString)) {
+        return res.status(400).json({ message: 'วันที่เลือกถูกปิด กรุณาเลือกวันอื่น' });
+      }
+
+      // ตรวจสอบจำนวนคิวในวันที่ต้องการย้ายไป
+      const bookingsOnDate = await Maintenance.countDocuments({
+        preferredDate: {
+          $gte: new Date(dateString),
+          $lt: new Date(new Date(dateString).setDate(new Date(dateString).getDate() + 1)),
+        },
+        status: { $in: ['pending', 'accepted'] },
+        _id: { $ne: req.params.id }, // ไม่นับคำขอปัจจุบัน
+      });
+
+      if (bookingsOnDate >= MAX_BOOKINGS_PER_DAY) {
+        return res.status(400).json({ message: 'วันที่เลือกเต็มแล้ว กรุณาเลือกวันอื่น' });
+      }
+
+      maintenance.preferredDate = newDate;
+    }
+
     if (req.body.status) {
       maintenance.status = req.body.status;
     }
-    if (req.body.preferredDate) {
-      maintenance.preferredDate = new Date(req.body.preferredDate);
-    }
     if (req.body.maintenanceType) {
-      maintenance.maintenanceType = req.body.maintenanceType; // เพิ่มการอัปเดต maintenanceType
+      maintenance.maintenanceType = req.body.maintenanceType;
     }
 
     maintenance.updatedAt = Date.now();

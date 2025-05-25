@@ -1,17 +1,26 @@
 const express = require('express');
 const router = express.Router();
 const Maintenance = require('../models/Maintenance');
+const ClosedDate = require('../models/ClosedDate'); // นำเข้า ClosedDate model
 const axios = require('axios');
 const auth = require('../middleware/auth');
 
 // สร้างคำขอ maintenance
 router.post('/', async (req, res) => {
   try {
-    const maintenance = new Maintenance(req.body);
+    const { name, phone, carModel, licensePlate, preferredDate, maintenanceType } = req.body;
+    const maintenance = new Maintenance({
+      name,
+      phone,
+      carModel,
+      licensePlate,
+      preferredDate,
+      maintenanceType, // รวม maintenanceType
+    });
     await maintenance.save();
 
     // ส่งแจ้งเตือนไปยัง LINE
-    const message = `มีคำขอ maintenance ใหม่\nชื่อ: ${maintenance.name}\nเบอร์โทร: ${maintenance.phone}\nรุ่นรถ: ${maintenance.carModel}\nทะเบียน: ${maintenance.licensePlate}\nวันที่สะดวก: ${maintenance.preferredDate.toISOString().slice(0, 10)}\nกรุณาโทรไปคอนเฟิร์ม`;
+    const message = `มีคำขอ maintenance ใหม่\nชื่อ: ${maintenance.name}\nเบอร์โทร: ${maintenance.phone}\nรุ่นรถ: ${maintenance.carModel}\nทะเบียน: ${maintenance.licensePlate}\nวันที่สะดวก: ${new Date(maintenance.preferredDate).toLocaleDateString('th-TH', { day: 'numeric', month: 'long', year: 'numeric' })}\nประเภท: ${maintenance.maintenanceType}\nกรุณาโทรไปคอนเฟิร์ม`;
     await axios.post('https://api.line.me/v2/bot/message/push', {
       to: process.env.LINE_CHANNEL_ID,
       messages: [{ type: 'text', text: message }],
@@ -38,9 +47,10 @@ router.get('/', auth, async (req, res) => {
   }
 });
 
-// ดึงวันที่ที่เต็ม (มีคำขอตั้งแต่ 1 รายการ และสถานะเป็น pending หรือ accepted)
+// ดึงวันที่ที่เต็ม (รวมวันที่ถูกจองและวันที่ปิด)
 router.get('/booked-dates', async (req, res) => {
   try {
+    // ดึงวันที่ที่ถูกจอง (สถานะ pending หรือ accepted)
     const fullDates = await Maintenance.aggregate([
       {
         $match: {
@@ -60,7 +70,17 @@ router.get('/booked-dates', async (req, res) => {
         $project: { _id: 1 },
       },
     ]);
-    const bookedDates = fullDates.map((item) => item._id);
+
+    // ดึงวันที่ที่ถูกปิด
+    const closedDates = await ClosedDate.find();
+    const closedDatesFormatted = closedDates.map(cd => new Date(cd.date).toISOString().split('T')[0]);
+
+    // รวมวันที่ทั้งหมด
+    const bookedDates = [
+      ...fullDates.map(item => item._id),
+      ...closedDatesFormatted,
+    ].filter((date, index, self) => self.indexOf(date) === index); // ลบข้อมูลซ้ำ
+
     res.json({ bookedDates });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -110,10 +130,18 @@ router.patch('/:id', auth, async (req, res) => {
     if (!maintenance) {
       return res.status(404).json({ message: 'ไม่พบคำขอ' });
     }
-    maintenance.status = req.body.status;
+
+    // อัปเดตฟิลด์ที่ได้รับจาก payload
+    if (req.body.status) {
+      maintenance.status = req.body.status;
+    }
     if (req.body.preferredDate) {
       maintenance.preferredDate = new Date(req.body.preferredDate);
     }
+    if (req.body.maintenanceType) {
+      maintenance.maintenanceType = req.body.maintenanceType; // เพิ่มการอัปเดต maintenanceType
+    }
+
     maintenance.updatedAt = Date.now();
     await maintenance.save();
     res.json(maintenance);

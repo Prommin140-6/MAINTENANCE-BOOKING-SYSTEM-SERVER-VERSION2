@@ -8,6 +8,44 @@ const auth = require('../middleware/auth');
 // กำหนดจำนวนคิวสูงสุดต่อวัน
 const MAX_BOOKINGS_PER_DAY = 4; // ปรับเปลี่ยนตามต้องการ
 
+// Webhook Endpoint เพื่อรับ Event จาก LINE (เช่น Group ID)
+router.post('/webhook', async (req, res) => {
+  try {
+    const events = req.body.events;
+    for (const event of events) {
+      // ตรวจสอบว่า Event มาจาก Group หรือไม่
+      if (event.source && event.source.type === 'group') {
+        const groupId = event.source.groupId;
+        console.log('Group ID:', groupId); // บันทึก Group ID เพื่อใช้งาน
+
+        // (ตัวเลือก) บันทึก groupId ลงในฐานข้อมูลหรือไฟล์ตามต้องการ
+      }
+
+      // ตอบกลับข้อความใน Group (ตัวอย่าง)
+      if (event.type === 'message' && event.message.type === 'text') {
+        const replyToken = event.replyToken;
+        const messageText = event.message.text;
+
+        if (messageText === 'สวัสดี') {
+          await axios.post('https://api.line.me/v2/bot/message/reply', {
+            replyToken: replyToken,
+            messages: [{ type: 'text', text: 'สวัสดีจาก Bot ค่ะ!' }],
+          }, {
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`,
+            },
+          });
+        }
+      }
+    }
+    res.status(200).send('OK');
+  } catch (error) {
+    console.error('Webhook Error:', error.message);
+    res.status(500).send('Error');
+  }
+});
+
 // สร้างคำขอ maintenance
 router.post('/', async (req, res) => {
   try {
@@ -22,10 +60,11 @@ router.post('/', async (req, res) => {
     });
     await maintenance.save();
 
-    // ส่งแจ้งเตือนไปยัง LINE
+    // ส่งแจ้งเตือนไปยัง Group (ใช้ groupId ที่ได้จาก Webhook)
+    const groupId = 'C1234567890abcdef'; // แทนที่ด้วย groupId ที่ได้จาก Webhook
     const message = `มีคำขอ maintenance ใหม่\nชื่อ: ${maintenance.name}\nเบอร์โทร: ${maintenance.phone}\nรุ่นรถ: ${maintenance.carModel}\nทะเบียน: ${maintenance.licensePlate}\nวันที่สะดวก: ${new Date(maintenance.preferredDate).toLocaleDateString('th-TH', { day: 'numeric', month: 'long', year: 'numeric' })}\nประเภท: ${maintenance.maintenanceType}\nกรุณาโทรไปคอนเฟิร์ม`;
     await axios.post('https://api.line.me/v2/bot/message/push', {
-      to: process.env.LINE_CHANNEL_ID,
+      to: groupId, // ใช้ groupId แทน process.env.LINE_CHANNEL_ID
       messages: [{ type: 'text', text: message }],
     }, {
       headers: {

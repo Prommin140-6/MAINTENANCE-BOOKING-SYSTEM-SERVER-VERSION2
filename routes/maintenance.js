@@ -6,7 +6,7 @@ const axios = require('axios');
 const auth = require('../middleware/auth');
 
 // กำหนดจำนวนคิวสูงสุดต่อวัน
-const MAX_BOOKINGS_PER_DAY = 2; // ปรับเปลี่ยนตามต้องการ เช่น 3, 4, เป็นต้น
+const MAX_BOOKINGS_PER_DAY = 3; 
 
 // สร้างคำขอ maintenance
 router.post('/', async (req, res) => {
